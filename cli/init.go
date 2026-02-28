@@ -6,13 +6,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/template"
 
 	"github.com/spf13/cobra"
 )
 
-//go:embed templates/*
+//go:embed all:templates
 var templates embed.FS
 
 var initFlags struct {
@@ -54,6 +55,7 @@ type TemplateData struct {
 	ProjectNameTitle  string // Title case version
 	ProjectNameLower  string // Lowercase version
 	ProjectNameUpper  string // Uppercase version
+	JuangoVersion     string // CLI version for go.mod template
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
@@ -63,6 +65,17 @@ func runInit(cmd *cobra.Command, args []string) error {
 	if _, err := exec.LookPath("npm"); err != nil {
 		return fmt.Errorf("npm not found in PATH. Please install Node.js and npm first")
 	}
+
+	// Check Node version (need 18+)
+	nodeVersionOutput, err := exec.Command("node", "--version").Output()
+	if err != nil {
+		return fmt.Errorf("node not found in PATH. Please install Node.js 18+ first")
+	}
+	nodeMajor := parseNodeMajorVersion(string(nodeVersionOutput))
+	if nodeMajor < 18 {
+		return fmt.Errorf("Node.js 18+ required, found %s", strings.TrimSpace(string(nodeVersionOutput)))
+	}
+
 	if _, err := exec.LookPath("go"); err != nil {
 		return fmt.Errorf("go not found in PATH. Please install Go first")
 	}
@@ -84,6 +97,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		ProjectNameTitle:  toTitleCase(projectName),
 		ProjectNameLower:  strings.ToLower(projectName),
 		ProjectNameUpper:  strings.ToUpper(strings.ReplaceAll(projectName, "-", "_")),
+		JuangoVersion:     Version,
 	}
 
 	if data.Description == "" {
@@ -247,4 +261,15 @@ func toTitleCase(s string) string {
 		}
 	}
 	return strings.Join(words, "")
+}
+
+func parseNodeMajorVersion(version string) int {
+	// "v22.20.0\n" -> 22
+	version = strings.TrimPrefix(strings.TrimSpace(version), "v")
+	parts := strings.Split(version, ".")
+	if len(parts) > 0 {
+		major, _ := strconv.Atoi(parts[0])
+		return major
+	}
+	return 0
 }
