@@ -1,0 +1,135 @@
+package cli
+
+import (
+	"context"
+	"fmt"
+	"os"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+	"github.com/spf13/cobra"
+	"{{.ModulePath}}/internal/database"
+	"{{.ModulePath}}/internal/types"
+
+	juangotypes "github.com/juanfont/juango/types"
+)
+
+var dbFlags struct {
+	configPath string
+}
+
+var dbCmd = &cobra.Command{
+	Use:   "db",
+	Short: "Database management commands",
+}
+
+var dbBackupCmd = &cobra.Command{
+	Use:   "backup <path>",
+	Short: "Create a database backup using VACUUM INTO",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runDBBackup,
+}
+
+var dbStatsCmd = &cobra.Command{
+	Use:   "stats",
+	Short: "Show database statistics",
+	RunE:  runDBStats,
+}
+
+func init() {
+	dbCmd.PersistentFlags().StringVarP(&dbFlags.configPath, "config", "c", "", "Path to config file")
+
+	dbCmd.AddCommand(dbBackupCmd)
+	dbCmd.AddCommand(dbStatsCmd)
+}
+
+func runDBBackup(cmd *cobra.Command, args []string) error {
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout})
+
+	if err := types.ReadViperConfig(dbFlags.configPath, dbFlags.configPath != ""); err != nil {
+		return err
+	}
+	config, err := types.GetConfig()
+	if err != nil {
+		return err
+	}
+
+	db, err := database.New(config.Database.Path)
+	if err != nil {
+		return fmt.Errorf("opening database: %w", err)
+	}
+	defer db.Close()
+
+	backupPath := args[0]
+	_, err = db.DB().Exec("VACUUM INTO ?", backupPath)
+	if err != nil {
+		return fmt.Errorf("backup failed: %w", err)
+	}
+
+	fmt.Printf("Database backed up to %s\n", backupPath)
+	return nil
+}
+
+func runDBStats(cmd *cobra.Command, args []string) error {
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout})
+
+	if err := types.ReadViperConfig(dbFlags.configPath, dbFlags.configPath != ""); err != nil {
+		return err
+	}
+	config, err := types.GetConfig()
+	if err != nil {
+		return err
+	}
+
+	db, err := database.New(config.Database.Path)
+	if err != nil {
+		return fmt.Errorf("opening database: %w", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+
+	userCount, err := db.CountUsers(ctx)
+	if err != nil {
+		return fmt.Errorf("counting users: %w", err)
+	}
+
+	adminCount, err := db.CountAdminUsers(ctx)
+	if err != nil {
+		return fmt.Errorf("counting admins: %w", err)
+	}
+
+	auditCount, err := db.CountAuditLogs(ctx, juangotypes.AuditLogFilter{})
+	if err != nil {
+		return fmt.Errorf("counting audit logs: %w", err)
+	}
+
+	// Get file size
+	var fileSize string
+	fi, err := os.Stat(config.Database.Path)
+	if err == nil {
+		size := fi.Size()
+		switch {
+		case size >= 1<<30:
+			fileSize = fmt.Sprintf("%.2f GB", float64(size)/(1<<30))
+		case size >= 1<<20:
+			fileSize = fmt.Sprintf("%.2f MB", float64(size)/(1<<20))
+		case size >= 1<<10:
+			fileSize = fmt.Sprintf("%.2f KB", float64(size)/(1<<10))
+		default:
+			fileSize = fmt.Sprintf("%d bytes", size)
+		}
+	} else {
+		fileSize = "unknown"
+	}
+
+	fmt.Println("Database Statistics")
+	fmt.Println("-------------------")
+	fmt.Printf("Users:      %d\n", userCount)
+	fmt.Printf("Admins:     %d\n", adminCount)
+	fmt.Printf("Audit Logs: %d\n", auditCount)
+	fmt.Printf("DB Size:    %s\n", fileSize)
+	fmt.Printf("DB Path:    %s\n", config.Database.Path)
+
+	return nil
+}

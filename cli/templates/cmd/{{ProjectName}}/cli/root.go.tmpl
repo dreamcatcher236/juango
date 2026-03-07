@@ -21,4 +21,8 @@ func Execute() {
 
 func init() {
 	rootCmd.AddCommand(serveCmd)
+	rootCmd.AddCommand(makeAdminCmd)
+	rootCmd.AddCommand(listAdminsCmd)
+	rootCmd.AddCommand(removeAdminCmd)
+	rootCmd.AddCommand(dbCmd)
 }
