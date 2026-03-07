@@ -7,6 +7,8 @@ import { Toaster } from './components/ui/sonner'
 import Layout from './components/Layout'
 import Home from './pages/Home'
 import Login from './pages/Login'
+import AdminUsers from './pages/admin/Users'
+import AdminAuditLogs from './pages/admin/AuditLogs'
 
 export default function App() {
   return (
@@ -24,6 +26,8 @@ export default function App() {
               }
             >
               <Route index element={<Home />} />
+              <Route path="admin/users" element={<AdminUsers />} />
+              <Route path="admin/audit-logs" element={<AdminAuditLogs />} />
               {/* Add your application-specific routes here */}
             </Route>
           </Routes>
