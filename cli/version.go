@@ -8,7 +8,7 @@ import (
 
 var (
 	// Version is set at build time
-	Version = "0.3.0"
+	Version = "0.4.0"
 	// Commit is set at build time
 	Commit = "unknown"
 )
