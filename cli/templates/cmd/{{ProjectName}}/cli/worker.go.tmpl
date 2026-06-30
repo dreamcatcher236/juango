@@ -1,0 +1,99 @@
+package cli
+
+import (
+	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"github.com/juanfont/juango/tasks"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+	"github.com/spf13/cobra"
+	"{{.ModulePath}}/internal/database"
+	internalTasks "{{.ModulePath}}/internal/tasks"
+	"{{.ModulePath}}/internal/types"
+)
+
+var workerFlags struct {
+	configPath string
+}
+
+var workerCmd = &cobra.Command{
+	Use:   "worker",
+	Short: "Start the background task worker",
+	RunE:  runWorker,
+}
+
+func init() {
+	workerCmd.Flags().StringVarP(&workerFlags.configPath, "config", "c", "", "Path to config file")
+}
+
+func runWorker(cmd *cobra.Command, args []string) error {
+	// Setup logging
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout})
+
+	// Load config
+	if err := types.ReadViperConfig(workerFlags.configPath, workerFlags.configPath != ""); err != nil {
+		return err
+	}
+
+	config, err := types.GetConfig()
+	if err != nil {
+		return err
+	}
+
+	if !config.Tasks.Enabled {
+		return fmt.Errorf("background tasks are disabled, set tasks.enabled to true in the config")
+	}
+
+	// Open database
+	db, err := database.New(config.Database.Path)
+	if err != nil {
+		return err
+	}
+
+	// Create task server
+	serverCfg := tasks.DefaultServerConfig(
+		config.Redis.Addr,
+		config.Redis.Password,
+		config.Redis.DB,
+	)
+	server := tasks.NewServer(serverCfg)
+
+	// Register task handlers
+	internalTasks.RegisterHandlers(server, db)
+
+	// Handle shutdown signals
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	// Start worker in background
+	errChan := make(chan error, 1)
+	go func() {
+		log.Info().
+			Str("redis", config.Redis.Addr).
+			Msg("Worker starting, waiting for tasks...")
+		if err := server.Run(); err != nil {
+			errChan <- err
+		}
+	}()
+
+	// Wait for signal or error
+	select {
+	case sig := <-sigChan:
+		log.Info().Str("signal", sig.String()).Msg("Received signal, shutting down worker")
+		server.Shutdown()
+	case err := <-errChan:
+		log.Error().Err(err).Msg("Worker error")
+		server.Shutdown()
+	}
+
+	// Close database to checkpoint WAL
+	if err := db.Close(); err != nil {
+		log.Error().Err(err).Msg("Error closing database")
+	}
+
+	log.Info().Msg("Worker shutdown complete")
+	return nil
+}

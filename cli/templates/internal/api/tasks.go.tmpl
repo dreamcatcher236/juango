@@ -1,0 +1,57 @@
+package api
+
+import (
+	"encoding/json"
+	"net/http"
+
+	"{{.ModulePath}}/internal/tasks"
+)
+
+type DummyTaskRequest struct {
+	Message string `json:"message"`
+	Count   int    `json:"count"`
+}
+
+type TaskResponse struct {
+	Success bool   `json:"success"`
+	TaskID  string `json:"task_id"`
+	Queue   string `json:"queue"`
+	Message string `json:"message,omitempty"`
+	Count   int    `json:"count,omitempty"`
+}
+
+func (a *App) TasksDummyHandler(w http.ResponseWriter, r *http.Request) {
+	if a.taskClient == nil {
+		http.Error(w, "Background tasks are disabled (set tasks.enabled in config)", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req DummyTaskRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Count < 1 || req.Count > 60 {
+		http.Error(w, "Count must be between 1 and 60", http.StatusBadRequest)
+		return
+	}
+
+	info, err := a.taskClient.Enqueue(tasks.TypeDummyTask, tasks.DummyTaskPayload{
+		Message: req.Message,
+		Count:   req.Count,
+	})
+	if err != nil {
+		http.Error(w, "Failed to enqueue task", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(TaskResponse{
+		Success: true,
+		TaskID:  info.ID,
+		Queue:   info.Queue,
+		Message: req.Message,
+		Count:   req.Count,
+	})
+}

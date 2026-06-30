@@ -33,6 +33,10 @@ type DatabaseConfig struct {
 	Path string `mapstructure:"path"`
 }
 
+type TasksConfig struct {
+	Enabled bool `mapstructure:"enabled"`
+}
+
 type RedisConfig struct {
 	Addr     string `mapstructure:"addr"`
 	Password string `mapstructure:"password"`
@@ -53,6 +57,7 @@ type Config struct {
 
 	Session  SessionConfig  `mapstructure:"session"`
 	Database DatabaseConfig `mapstructure:"database"`
+	Tasks    TasksConfig    `mapstructure:"tasks"`
 	Redis    RedisConfig    `mapstructure:"redis"`
 	OIDC     OIDCConfig     `mapstructure:"oidc"`
 	Logging  LogConfig      `mapstructure:"logging"`
@@ -78,6 +83,7 @@ func ReadViperConfig(path string, isFile bool) error {
 	viper.AutomaticEnv()
 
 	viper.SetDefault("admin_mode_timeout", 30*time.Minute)
+	viper.SetDefault("tasks.enabled", false)
 	viper.SetDefault("redis.addr", "localhost:6379")
 	viper.SetDefault("logging.level", "info")
 	viper.SetDefault("logging.format", TextLogFormat)
@@ -104,6 +110,9 @@ func GetConfig() (*Config, error) {
 		Logging:          logConfig,
 		Database: DatabaseConfig{
 			Path: viper.GetString("database.path"),
+		},
+		Tasks: TasksConfig{
+			Enabled: viper.GetBool("tasks.enabled"),
 		},
 		Redis: RedisConfig{
 			Addr:     viper.GetString("redis.addr"),

@@ -15,6 +15,7 @@ import type {
   AuditLog,
   AuditLogFilters,
   AuditLogStats,
+  TaskResponse,
 } from "./types"
 
 const DEFAULT_API_BASE = "/api"
@@ -152,6 +153,14 @@ export class ApiClient {
 
   async getAuditLogStats(): Promise<AuditLogStats> {
     return this.request<AuditLogStats>("/admin/audit-logs/stats")
+  }
+
+  // Tasks
+  async enqueueDummyTask(message: string, count: number): Promise<TaskResponse> {
+    return this.request<TaskResponse>("/admin/tasks/dummy", {
+      method: "POST",
+      body: JSON.stringify({ message, count }),
+    })
   }
 
   // Health

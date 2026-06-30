@@ -8,6 +8,7 @@ import (
 	"github.com/gorilla/sessions"
 	"github.com/juanfont/juango/admin"
 	"github.com/juanfont/juango/auth"
+	"github.com/juanfont/juango/tasks"
 	juangotypes "github.com/juanfont/juango/types"
 	"github.com/michaeljs1990/sqlitestore"
 	"github.com/rs/zerolog"
@@ -28,11 +29,12 @@ type App struct {
 	adminHandlers     *admin.Handlers
 	adminAPIHandlers  *admin.AdminAPIHandlers
 	healthHandler     *admin.HealthHandler
+	taskClient        *tasks.Client
 
 	logger zerolog.Logger
 }
 
-func NewApp(ctx context.Context, config *types.Config, database *database.Database, router *mux.Router) (*App, error) {
+func NewApp(ctx context.Context, config *types.Config, database *database.Database, taskClient *tasks.Client, router *mux.Router) (*App, error) {
 	// Setup OIDC provider
 	oidcProvider, err := auth.NewOIDCProvider(ctx, auth.OIDCProviderConfig{
 		ServerURL: config.AdvertiseURL,
@@ -74,6 +76,7 @@ func NewApp(ctx context.Context, config *types.Config, database *database.Databa
 		oidcProvider: oidcProvider,
 		sessionStore: sessionStore,
 		router:       router,
+		taskClient:   taskClient,
 		logger:       log.Logger,
 	}
 
@@ -168,6 +171,11 @@ func (a *App) registerRoutes() {
 	a.router.HandleFunc("/api/admin/audit-logs",
 		a.sessionMiddleware.RequireAuth(
 			a.sessionMiddleware.RequireAdminMode(a.adminAPIHandlers.ListAuditLogsHandler))).Methods("GET")
+
+	// Task routes
+	a.router.HandleFunc("/api/admin/tasks/dummy",
+		a.sessionMiddleware.RequireAuth(
+			a.sessionMiddleware.RequireAdminMode(a.TasksDummyHandler))).Methods("POST")
 
 	// Add your application-specific routes here
 	// Example:

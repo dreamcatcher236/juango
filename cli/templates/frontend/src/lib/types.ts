@@ -132,6 +132,15 @@ export interface AuditLogStats {
   top_resource_types?: string[]
 }
 
+// Tasks
+export interface TaskResponse {
+  success: boolean
+  task_id: string
+  queue: string
+  message?: string
+  count?: number
+}
+
 // Notifications
 export interface Notification {
   id: string

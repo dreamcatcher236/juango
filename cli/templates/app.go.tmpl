@@ -9,6 +9,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/juanfont/juango/frontend"
 	"github.com/juanfont/juango/middleware"
+	"github.com/juanfont/juango/tasks"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
 	"{{.ModulePath}}/internal/api"
@@ -20,9 +21,10 @@ import (
 var frontendFS embed.FS
 
 type App struct {
-	config *types.Config
-	db     *database.Database
-	server *http.Server
+	config     *types.Config
+	db         *database.Database
+	taskClient *tasks.Client
+	server     *http.Server
 }
 
 func New(config *types.Config) (*App, error) {
@@ -31,9 +33,19 @@ func New(config *types.Config) (*App, error) {
 		return nil, err
 	}
 
+	var taskClient *tasks.Client
+	if config.Tasks.Enabled {
+		taskClient = tasks.NewClient(
+			config.Redis.Addr,
+			config.Redis.Password,
+			config.Redis.DB,
+		)
+	}
+
 	return &App{
-		config: config,
-		db:     db,
+		config:     config,
+		db:         db,
+		taskClient: taskClient,
 	}, nil
 }
 
@@ -45,6 +57,16 @@ func (a *App) Shutdown(ctx context.Context) error {
 		if shutdownErr := a.server.Shutdown(ctx); shutdownErr != nil {
 			log.Error().Err(shutdownErr).Msg("Error during HTTP server shutdown")
 			err = shutdownErr
+		}
+	}
+
+	if a.taskClient != nil {
+		log.Info().Msg("Closing task client")
+		if closeErr := a.taskClient.Close(); closeErr != nil {
+			log.Error().Err(closeErr).Msg("Error closing task client")
+			if err == nil {
+				err = closeErr
+			}
 		}
 	}
 
@@ -82,7 +104,7 @@ func (a *App) Serve() error {
 
 	// Setup API routes
 	ctx := context.Background()
-	if _, err := api.NewApp(ctx, a.config, a.db, router); err != nil {
+	if _, err := api.NewApp(ctx, a.config, a.db, a.taskClient, router); err != nil {
 		return err
 	}
 

@@ -1,0 +1,98 @@
+# Database & schema management
+
+{{.ProjectName}} uses SQLite (WAL mode) with [squibble](https://github.com/tailscale/squibble)
+for schema management. The whole schema lives in [`sql/schema.sql`](sql/schema.sql),
+which is embedded into the binary and applied on startup.
+
+## How it works
+
+On startup, `database.New` hands `schema.sql` to squibble as the **current** schema.
+squibble keeps a `_schema_history` table recording the SHA-256 digest of the schema
+it last applied, and on every start it compares that against the live database:
+
+- **Empty database** → squibble creates everything in `schema.sql`.
+- **Live schema matches** → nothing to do, startup continues.
+- **Live schema drifted** and squibble has no rule explaining the change → it refuses
+  to start, with an error like:
+
+  ```
+  failed to apply schema: no update found for digest <SOURCE> (did you add an update rule?)
+  ```
+
+## Greenfield workflow (current)
+
+While there is no production data to protect, evolving the schema is just editing
+`schema.sql`:
+
+1. Edit `sql/schema.sql` (add a column, table, index, …).
+2. Delete your local dev database, or start with a fresh one.
+3. Restart — squibble recreates the schema to match.
+
+Keep statements idempotent (`CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`).
+
+> Note: any table a library creates at runtime must also be declared in `schema.sql`,
+> or it reads as unexplained drift the moment a second process (the worker, or a
+> restarted server) opens the database. The `sessions` table is declared there for
+> exactly this reason.
+
+## Creating a migration (once you have data you can't drop)
+
+When a database already holds real data, you can't recreate it — you describe the
+change as a squibble **update rule**: the digest before the change (`Source`), the
+digest after (`Target`), and a function that performs the change.
+
+**1. Edit `sql/schema.sql`** to the new desired state, then start the app. squibble
+will refuse to start and print both digests:
+
+```
+Database schema: <SOURCE digest>      # what the live DB currently is
+Target schema:   <TARGET digest>      # what schema.sql now describes
+```
+
+**2. Wire an update rule.** Change `db.go` to open the database *without*
+auto-applying the schema (pass `""`), build a `squibble.Schema` carrying the rule,
+and apply it with `database.MigrateWithSquibble`:
+
+```go
+import (
+	"context"
+
+	"github.com/juanfont/juango/database"
+	"github.com/tailscale/squibble"
+)
+
+func New(path string) (*Database, error) {
+	// Open without auto-applying so we control the squibble.Schema.
+	db, err := database.New(path, "")
+	if err != nil {
+		return nil, err
+	}
+
+	schema := &squibble.Schema{
+		Current: dbSchema, // the embedded sql/schema.sql
+		Updates: []squibble.UpdateRule{
+			{
+				Source: "<SOURCE digest from the error>",
+				Target: "<TARGET digest from the error>",
+				Apply: func(ctx context.Context, conn squibble.DBConn) error {
+					_, err := conn.ExecContext(ctx,
+						`ALTER TABLE users ADD COLUMN phone TEXT NOT NULL DEFAULT ''`)
+					return err
+				},
+			},
+		},
+	}
+
+	if err := database.MigrateWithSquibble(db, schema); err != nil {
+		return nil, err
+	}
+	return &Database{Database: db}, nil
+}
+```
+
+**3. Restart.** squibble runs the rule's `Apply`, verifies the result hashes to
+`Target`, and records it in `_schema_history`. Each subsequent schema change appends
+one more `UpdateRule` whose `Source` is the previous rule's `Target`.
+
+See the [squibble package docs](https://pkg.go.dev/github.com/tailscale/squibble) for
+the full API.

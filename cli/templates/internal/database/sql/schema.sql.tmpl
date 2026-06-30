@@ -1,3 +1,24 @@
+-- Database schema for {{.ProjectName}}.
+--
+-- This file is the single source of truth for the schema. It is embedded into the
+-- binary and applied on startup by squibble (github.com/tailscale/squibble) as the
+-- `Current` schema.
+--
+-- Greenfield workflow (you are here): squibble brings any empty database up to match
+-- this file exactly -- no migration rules required. Just edit the statements below
+-- and restart. Keep every statement idempotent (CREATE TABLE/INDEX IF NOT EXISTS) so
+-- re-applying is safe.
+--
+-- Evolving a schema that already holds data (later): squibble compares a hash of the
+-- live database against this file and refuses to start on any drift it cannot explain.
+-- At that point you register migration rules that transform the old schema into the
+-- new one. See https://pkg.go.dev/github.com/tailscale/squibble for how to add them.
+-- We are not there yet, so no migrations are defined.
+--
+-- Note: any table created at runtime by a library (e.g. the sqlitestore `sessions`
+-- table) MUST be declared here too, otherwise it shows up as unexplained drift the
+-- moment a second process (the worker, or a restarted server) opens the database.
+
 -- Users table
 CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
@@ -51,5 +72,18 @@ CREATE TABLE IF NOT EXISTS notifications (
 
 CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(user_id, read);
+
+-- Sessions table. Managed here (rather than left to sqlitestore's lazy
+-- CREATE TABLE IF NOT EXISTS) so squibble's schema digest stays stable: otherwise
+-- the table appears at runtime and any second process opening the database (e.g.
+-- the worker, or a restarted server) fails schema validation. The column
+-- definitions must match github.com/michaeljs1990/sqlitestore exactly.
+CREATE TABLE IF NOT EXISTS sessions (
+    id INTEGER PRIMARY KEY,
+    session_data LONGBLOB,
+    created_on TIMESTAMP DEFAULT 0,
+    modified_on TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_on TIMESTAMP DEFAULT 0
+);
 
 -- Add your application-specific tables below

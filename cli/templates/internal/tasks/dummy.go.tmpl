@@ -1,0 +1,62 @@
+package tasks
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/hibiken/asynq"
+	"github.com/rs/zerolog/log"
+)
+
+const (
+	TypeDummyTask = "dummy:hello"
+)
+
+// DummyTaskPayload is the payload for the dummy task.
+type DummyTaskPayload struct {
+	Message string `json:"message"`
+	Count   int    `json:"count"`
+}
+
+// NewDummyTask creates a new dummy task.
+func NewDummyTask(message string, count int) (*asynq.Task, error) {
+	payload, err := json.Marshal(DummyTaskPayload{
+		Message: message,
+		Count:   count,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return asynq.NewTask(TypeDummyTask, payload), nil
+}
+
+// HandleDummyTask processes the dummy task.
+func HandleDummyTask(ctx context.Context, t *asynq.Task) error {
+	var p DummyTaskPayload
+	if err := json.Unmarshal(t.Payload(), &p); err != nil {
+		return fmt.Errorf("json.Unmarshal failed: %w", err)
+	}
+
+	log.Info().
+		Str("message", p.Message).
+		Int("count", p.Count).
+		Msg("Processing dummy task")
+
+	for i := 1; i <= p.Count; i++ {
+		log.Info().
+			Int("step", i).
+			Int("total", p.Count).
+			Str("message", p.Message).
+			Msg("Working on task")
+		time.Sleep(1 * time.Second)
+	}
+
+	log.Info().
+		Str("message", p.Message).
+		Int("count", p.Count).
+		Msg("Dummy task completed successfully")
+
+	return nil
+}

@@ -1,0 +1,32 @@
+# Containerized smoke test (Approach B).
+# Brings up Redis and a runner that scaffolds a project, builds it, runs `serve`
+# and `worker`, and exercises the whole path. Run via `just smoke`.
+services:
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+
+  runner:
+    build:
+      context: .
+      dockerfile: smoke/Dockerfile
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      REDIS_ADDR: "redis:6379"
+    # Chrome needs more shared memory than Docker's 64MB default.
+    shm_size: "1gb"
+    volumes:
+      - .:/workspace
+      - go-mod-cache:/go/pkg/mod
+      - go-build-cache:/root/.cache/go-build
+    working_dir: /workspace
+
+volumes:
+  go-mod-cache:
+  go-build-cache:

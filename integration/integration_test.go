@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"os"
@@ -28,11 +29,34 @@ var (
 )
 
 type testServerInfo struct {
-	tmpDir     string
-	projectDir string
-	cmd        *exec.Cmd
-	cancel     context.CancelFunc
-	output     *bytes.Buffer
+	tmpDir      string
+	projectDir  string
+	projectName string
+	binPath     string
+	configPath  string
+	redisAddr   string
+	cmd         *exec.Cmd
+	cancel      context.CancelFunc
+	output      *bytes.Buffer
+}
+
+// redisAddr returns the Redis address for the smoke test, honoring REDIS_ADDR
+// (set by the containerized runner) and falling back to a local default.
+func redisAddr() string {
+	if addr := os.Getenv("REDIS_ADDR"); addr != "" {
+		return addr
+	}
+	return "localhost:6379"
+}
+
+// redisReachable reports whether a Redis server accepts TCP connections at addr.
+func redisReachable(addr string) bool {
+	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
 }
 
 // projectRoot returns the root directory of the juango project
@@ -126,13 +150,16 @@ oidc:
     - profile
     - email
 
+tasks:
+  enabled: true
+
 redis:
-  addr: "localhost:6379"
+  addr: "%s"
 
 logging:
   level: debug
   format: text
-`, projectDir, mockOIDC.Issuer(), mockOIDC.ClientID, mockOIDC.ClientSecret)
+`, projectDir, mockOIDC.Issuer(), mockOIDC.ClientID, mockOIDC.ClientSecret, redisAddr())
 
 	if err := os.WriteFile(configPath, []byte(config), 0644); err != nil {
 		return fmt.Errorf("failed to write config: %w", err)
@@ -196,11 +223,15 @@ logging:
 	}
 
 	testServer = &testServerInfo{
-		tmpDir:     tmpDir,
-		projectDir: projectDir,
-		cmd:        serverCmd,
-		cancel:     cancel,
-		output:     &serverOutput,
+		tmpDir:      tmpDir,
+		projectDir:  projectDir,
+		projectName: projectName,
+		binPath:     projectBin,
+		configPath:  configPath,
+		redisAddr:   redisAddr(),
+		cmd:         serverCmd,
+		cancel:      cancel,
+		output:      &serverOutput,
 	}
 	serverBaseURL = "http://localhost:18080"
 

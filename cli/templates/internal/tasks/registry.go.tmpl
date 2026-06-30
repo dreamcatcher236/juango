@@ -1,0 +1,18 @@
+package tasks
+
+import (
+	"github.com/juanfont/juango/tasks"
+	"{{.ModulePath}}/internal/database"
+)
+
+// RegisterHandlers registers all task handlers with the server.
+func RegisterHandlers(server *tasks.Server, db *database.Database) {
+	// Register dummy task for testing
+	server.HandleFunc(TypeDummyTask, HandleDummyTask)
+
+	// Add your application-specific task handlers here
+	// Example:
+	// server.Handle(TypeMyTask, tasks.NewTaskHandler(func(ctx context.Context, p MyTaskPayload) error {
+	//     return processMyTask(ctx, db, p)
+	// }))
+}
