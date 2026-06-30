@@ -1,7 +1,7 @@
 # Runner image for the containerized smoke test (Approach B).
 # Bakes in Go + Node + headless Chromium so the whole scaffold->build->serve->worker
 # path runs identically on a laptop and in CI, with no host toolchain dependencies.
-FROM golang:1.24-bookworm
+FROM golang:1.26.3-bookworm
 
 # Node 22 (for the scaffolded frontend build) and Chromium (for the browser tests).
 RUN apt-get update \

@@ -32,7 +32,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.26.3'
           cache: true
 
       - name: Setup Node.js
@@ -68,7 +68,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.26.3'
           cache: true
 
       - name: Run golangci-lint
@@ -88,7 +88,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.26.3'
           cache: true
 
       - name: Build CLI
@@ -97,25 +97,17 @@ jobs:
       - name: Test CLI runs
         run: ./juango version
 
-  npm-package:
-    name: npm Package
+  smoke:
+    name: Containerized Smoke Test
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: ui/package-lock.json
+      - name: Run smoke test (scaffold -> build -> serve -> worker, with Redis)
+        run: docker compose -f docker-compose.smoke.yml up --build --exit-code-from runner
 
-      - name: Install dependencies
-        working-directory: ui
-        run: npm ci || npm install
-
-      - name: Type check
-        working-directory: ui
-        run: npm run build || echo "Build script not configured yet"
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.smoke.yml down -v

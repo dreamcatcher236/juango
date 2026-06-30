@@ -1,0 +1,107 @@
+# AGENTS.md
+
+Guidance for AI coding agents working inside **{{.ProjectName}}**, a full-stack
+Go + Vite/React app scaffolded with [juango](https://github.com/juanfont/juango).
+
+Module path: `{{.ModulePath}}`
+
+## What this project is
+
+A web app with batteries included from juango: OIDC authentication, cookie
+sessions (SQLite-backed), admin mode with audit logging, user impersonation, an
+admin API/UI, a health endpoint, and optional Redis-backed background tasks.
+Your job is to build features on top of this foundation.
+
+## Prerequisites
+
+- **Go** and **Node.js 18+ / npm**.
+- The `juango` CLI on your PATH (used by `just dev`). Install with
+  `go install github.com/juanfont/juango@latest`.
+
+## Run it
+
+```bash
+# 1. Create your config from the example
+cp config.example.yml config.yml
+
+# 2. Edit config.yml:
+#    - oidc.issuer / oidc.client_id / oidc.client_secret
+#    - session.authentication_key and session.encryption_key
+#      (each must be EXACTLY 32 bytes; generate with `openssl rand -hex 16`)
+
+# 3. Start dev (Vite + Go server, with proxy)
+just dev          # wraps `juango dev`
+```
+
+Visit the app at `http://localhost:{{.Port}}`.
+
+Other project commands (`just <name>`):
+
+- `build` — build the frontend then the `{{.ProjectName}}` binary.
+- `serve` — run the API server (`go run ./cmd/{{.ProjectName}} serve`).
+- `worker` — run the background task worker (requires Redis + `tasks.enabled: true`).
+- `test` — run Go tests.
+- `db-backup <path>` — back up the SQLite database.
+- `db-stats` — show database statistics.
+
+Admin CLI helpers: `make-admin <email>`, `list-admins`, `remove-admin <email>`
+(run via the built binary or `go run ./cmd/{{.ProjectName}} <cmd> -c config.yml`).
+
+## Layout
+
+```
+{{.ProjectName}}/
+├── cmd/{{.ProjectName}}/   # Entry point + CLI commands (serve, worker, admin, db)
+├── internal/
+│   ├── api/                # HTTP app: route registration + your handlers (app.go)
+│   ├── database/           # DB wrapper + sql/schema.sql (squibble-managed)
+│   ├── tasks/              # Background task definitions + handler registry
+│   └── types/              # Config struct + loading
+├── frontend/               # Vite/React SPA (pages, components, contexts, lib)
+├── app.go                  # Wires config -> DB -> API -> server
+├── config.example.yml
+└── justfile
+```
+
+## Where to add things
+
+- **API routes** — `internal/api/app.go`, at the comment
+  `Add your application-specific routes here` inside `registerRoutes()`. Wrap
+  handlers with `a.sessionMiddleware.RequireAuth(...)` (optionally
+  `RequireAdmin` / `RequireAdminMode`) like the existing routes.
+- **Background tasks** — define a task type + handler (copy
+  `internal/tasks/dummy.go`), then register it in `internal/tasks/registry.go`
+  at the comment `Add your application-specific task handlers here`. Enqueue from
+  API handlers via `a.taskClient` (see `internal/api/tasks.go`). Requires
+  `tasks.enabled: true`, a reachable `redis.addr`, and a running `just worker`.
+- **Database tables** — edit `internal/database/sql/schema.sql` below the comment
+  `Add your application-specific tables below`. Keep statements idempotent
+  (`CREATE TABLE IF NOT EXISTS`). The schema is managed by squibble — see
+  `internal/database/README.md` for the greenfield vs. migration-rule workflow.
+- **Frontend routes** — `frontend/src/App.tsx`, at the comment marker inside the
+  `Layout` route (next to the existing `admin/*` routes). Add a `Route` and a
+  matching page under `frontend/src/pages/`.
+
+## Tests
+
+```bash
+just test          # go test ./...
+# or directly:
+go test ./...
+```
+
+## Gotchas
+
+- **First OIDC login becomes admin.** First-user bootstrap is enabled: the first
+  user to log in via OIDC is auto-promoted to admin. Later users are not — use
+  `make-admin <email>` to promote them.
+- **Background tasks are opt-in.** `tasks.enabled` defaults to `false`. While
+  disabled, the task API returns 503 and `just worker` exits with an error.
+  Enabling tasks requires Redis.
+- **Session keys must be exactly 32 bytes.** Config validation rejects any
+  `session.authentication_key` / `session.encryption_key` that is not 32 bytes.
+  `openssl rand -hex 16` produces a correct value.
+- **Schema drift refuses startup.** squibble compares `sql/schema.sql` against the
+  live database. In greenfield, edit `schema.sql` and recreate your dev DB. Any
+  table a library creates at runtime (e.g. `sessions`) must be declared in
+  `schema.sql` too.
