@@ -47,6 +47,7 @@ type AuditLog struct {
 	ID           int64          `db:"id" json:"id"`
 	Timestamp    time.Time      `db:"timestamp" json:"timestamp"`
 	ActorUserID  NullUUID       `db:"actor_user_id" json:"actor_user_id"`
+	ActorName    string         `db:"actor_name" json:"actor_name,omitempty"`
 	Action       string         `db:"action" json:"action"`
 	ResourceType string         `db:"resource_type" json:"resource_type"`
 	ResourceID   string         `db:"resource_id" json:"resource_id"`
@@ -70,6 +71,9 @@ const (
 	ActionImpersonationStarted = "user.impersonation_started"
 	ActionImpersonationStopped = "user.impersonation_stopped"
 	ActionImpersonationExpired = "user.impersonation_expired"
+	ActionUserAdminGranted     = "user.admin_granted"
+	ActionUserAdminRevoked     = "user.admin_revoked"
+	ActionFirstUserBootstrap   = "user.first_user_bootstrap"
 
 	// Task actions
 	ActionTaskCreated   = "task.created"

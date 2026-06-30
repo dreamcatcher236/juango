@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, type ReactNode } from 'react'
+import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react'
 import { getApiClient } from '../lib/api'
 import type { AdminModeState } from '../lib/types'
 import { useAuth } from './AuthContext'
@@ -28,7 +28,7 @@ export function AdminProvider({ children }: AdminProviderProps) {
 
   const apiClient = getApiClient()
 
-  const refreshStatus = async () => {
+  const refreshStatus = useCallback(async () => {
     if (!user || !user.is_admin) {
       setIsAdminMode(false)
       setAdminModeState(null)
@@ -57,7 +57,7 @@ export function AdminProvider({ children }: AdminProviderProps) {
     } finally {
       setIsLoading(false)
     }
-  }
+  }, [user, apiClient])
 
   const enableAdminMode = async (reason: string) => {
     try {
@@ -99,7 +99,30 @@ export function AdminProvider({ children }: AdminProviderProps) {
 
   useEffect(() => {
     refreshStatus()
-  }, [user])
+  }, [refreshStatus])
+
+  // Auto-disable admin mode on tab close via sendBeacon
+  useEffect(() => {
+    if (!isAdminMode) return
+
+    const handleBeforeUnload = () => {
+      navigator.sendBeacon('/api/admin/mode/disable')
+    }
+
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [isAdminMode])
+
+  // Auto-expire: refresh status periodically to detect server-side expiry
+  useEffect(() => {
+    if (!isAdminMode) return
+
+    const interval = setInterval(() => {
+      refreshStatus()
+    }, 60000) // Check every minute
+
+    return () => clearInterval(interval)
+  }, [isAdminMode, refreshStatus])
 
   return (
     <AdminContext.Provider value={{

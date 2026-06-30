@@ -139,6 +139,19 @@ func startVite(ctx context.Context) error {
 func startGo(ctx context.Context, projectName string) error {
 	fmt.Println("Starting Go server...")
 
+	// Ensure frontend/dist exists for go:embed (create placeholder if needed)
+	distDir := "frontend/dist"
+	if _, err := os.Stat(distDir); os.IsNotExist(err) {
+		if err := os.MkdirAll(distDir, 0755); err != nil {
+			return fmt.Errorf("creating dist dir: %w", err)
+		}
+		// Create a placeholder file so go:embed works
+		placeholder := filepath.Join(distDir, ".gitkeep")
+		if err := os.WriteFile(placeholder, []byte(""), 0644); err != nil {
+			return fmt.Errorf("creating placeholder: %w", err)
+		}
+	}
+
 	// Find the main.go file
 	mainFile := fmt.Sprintf("cmd/%s/%s.go", projectName, projectName)
 	if _, err := os.Stat(mainFile); os.IsNotExist(err) {
@@ -149,7 +162,12 @@ func startGo(ctx context.Context, projectName string) error {
 		}
 	}
 
-	cmd := exec.CommandContext(ctx, "go", "run", mainFile, "serve")
+	// Check for config file
+	if _, err := os.Stat("config.yml"); os.IsNotExist(err) {
+		return fmt.Errorf("config.yml not found\n\nRun: cp config.example.yml config.yml")
+	}
+
+	cmd := exec.CommandContext(ctx, "go", "run", mainFile, "serve", "-c", "config.yml")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 

@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"context"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -48,16 +48,30 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}
 
 	// Handle shutdown signals
-	ctx, cancel := context.WithCancel(context.Background())
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
+	// Start server in background
+	errChan := make(chan error, 1)
 	go func() {
-		<-sigChan
-		log.Info().Msg("Shutdown signal received")
-		cancel()
-		app.Shutdown(ctx)
+		if err := app.Serve(); err != nil && err != http.ErrServerClosed {
+			errChan <- err
+		}
 	}()
 
-	return app.Serve()
+	// Wait for signal or error
+	select {
+	case sig := <-sigChan:
+		log.Info().Str("signal", sig.String()).Msg("Received signal, shutting down gracefully")
+	case err := <-errChan:
+		log.Error().Err(err).Msg("Server error")
+	}
+
+	// Graceful shutdown (closes HTTP server + checkpoints WAL)
+	if err := app.Close(); err != nil {
+		log.Error().Err(err).Msg("Error during shutdown")
+	}
+
+	log.Info().Msg("Shutdown complete")
+	return nil
 }

@@ -2,12 +2,15 @@ package integration_test
 
 import (
 	"encoding/json"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestScaffoldingRequiresModuleFlag tests that juango init requires -m flag
@@ -350,6 +353,7 @@ func TestScaffoldingProjectStructure(t *testing.T) {
 		"internal/api",
 		"internal/database",
 		"internal/database/sql",
+		"internal/tasks",
 		"internal/types",
 		"frontend/src",
 		"frontend/src/components",
@@ -372,12 +376,21 @@ func TestScaffoldingProjectStructure(t *testing.T) {
 		"config.example.yml",
 		".gitignore",
 		".goreleaser.yml",
+		"justfile",
 		"cmd/myproject/myproject.go",
 		"cmd/myproject/cli/root.go",
 		"cmd/myproject/cli/serve.go",
+		"cmd/myproject/cli/make_admin.go",
+		"cmd/myproject/cli/list_admins.go",
+		"cmd/myproject/cli/remove_admin.go",
+		"cmd/myproject/cli/db.go",
+		"cmd/myproject/cli/worker.go",
 		"internal/api/app.go",
+		"internal/api/tasks.go",
 		"internal/database/db.go",
 		"internal/database/sql/schema.sql",
+		"internal/tasks/registry.go",
+		"internal/tasks/dummy.go",
 		"internal/types/config.go",
 		"frontend/package.json",
 		"frontend/vite.config.ts",
@@ -394,4 +407,330 @@ func TestScaffoldingProjectStructure(t *testing.T) {
 			t.Errorf("Required file missing: %s", file)
 		}
 	}
+}
+
+// TestScaffoldingFullBuild tests that scaffolded project can build completely
+func TestScaffoldingFullBuild(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	// Skip if npm not available
+	if _, err := exec.LookPath("npm"); err != nil {
+		t.Skip("npm not available, skipping test")
+	}
+
+	tmpDir, err := os.MkdirTemp("", "juango-scaffold-build-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Build juango CLI
+	juangoBin := filepath.Join(tmpDir, "juango")
+	buildCmd := exec.Command("go", "build", "-o", juangoBin, ".")
+	buildCmd.Dir = projectRoot()
+	if output, err := buildCmd.CombinedOutput(); err != nil {
+		t.Fatalf("Failed to build juango: %v\n%s", err, output)
+	}
+
+	// Create scaffolded project
+	initCmd := exec.Command(juangoBin, "init", "testapp", "-m", "github.com/test/testapp")
+	initCmd.Dir = tmpDir
+	if output, err := initCmd.CombinedOutput(); err != nil {
+		t.Fatalf("juango init failed: %v\n%s", err, output)
+	}
+
+	// Add replace directive for local juango
+	projectDir := filepath.Join(tmpDir, "testapp")
+	goModPath := filepath.Join(projectDir, "go.mod")
+	goModContent, err := os.ReadFile(goModPath)
+	if err != nil {
+		t.Fatalf("Failed to read go.mod: %v", err)
+	}
+	replaceDirective := "\nreplace github.com/juanfont/juango => " + projectRoot() + "\n"
+	if err := os.WriteFile(goModPath, append(goModContent, []byte(replaceDirective)...), 0644); err != nil {
+		t.Fatalf("Failed to update go.mod: %v", err)
+	}
+
+	// Run go mod tidy
+	tidyCmd := exec.Command("go", "mod", "tidy")
+	tidyCmd.Dir = projectDir
+	if output, err := tidyCmd.CombinedOutput(); err != nil {
+		t.Fatalf("go mod tidy failed: %v\n%s", err, output)
+	}
+
+	// Build frontend
+	npmBuildCmd := exec.Command("npm", "run", "build")
+	npmBuildCmd.Dir = filepath.Join(tmpDir, "testapp", "frontend")
+	if output, err := npmBuildCmd.CombinedOutput(); err != nil {
+		t.Fatalf("npm run build failed: %v\n%s", err, output)
+	}
+
+	// Verify dist exists
+	distPath := filepath.Join(tmpDir, "testapp", "frontend", "dist", "index.html")
+	if _, err := os.Stat(distPath); os.IsNotExist(err) {
+		t.Error("dist/index.html not created after build")
+	}
+
+	// Build Go backend (needs frontend dist)
+	goBuildCmd := exec.Command("go", "build", "-o", "testapp", "./cmd/testapp")
+	goBuildCmd.Dir = projectDir
+	if output, err := goBuildCmd.CombinedOutput(); err != nil {
+		t.Fatalf("go build failed: %v\n%s", err, output)
+	}
+
+	// Verify binary exists
+	binaryPath := filepath.Join(tmpDir, "testapp", "testapp")
+	if _, err := os.Stat(binaryPath); os.IsNotExist(err) {
+		t.Error("testapp binary not created after build")
+	}
+}
+
+// TestScaffoldingWithMockOIDC tests that scaffolded project runs with mock OIDC
+func TestScaffoldingWithMockOIDC(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	// Skip if npm not available
+	if _, err := exec.LookPath("npm"); err != nil {
+		t.Skip("npm not available, skipping test")
+	}
+
+	tmpDir, err := os.MkdirTemp("", "juango-scaffold-oidc-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	projectDir := filepath.Join(tmpDir, "testapp")
+
+	// Build juango CLI
+	juangoBin := filepath.Join(tmpDir, "juango")
+	buildCmd := exec.Command("go", "build", "-o", juangoBin, ".")
+	buildCmd.Dir = projectRoot()
+	if output, err := buildCmd.CombinedOutput(); err != nil {
+		t.Fatalf("Failed to build juango: %v\n%s", err, output)
+	}
+
+	// Create scaffolded project
+	initCmd := exec.Command(juangoBin, "init", "testapp", "-m", "github.com/test/testapp")
+	initCmd.Dir = tmpDir
+	if output, err := initCmd.CombinedOutput(); err != nil {
+		t.Fatalf("juango init failed: %v\n%s", err, output)
+	}
+
+	// Build frontend
+	npmBuildCmd := exec.Command("npm", "run", "build")
+	npmBuildCmd.Dir = filepath.Join(projectDir, "frontend")
+	if output, err := npmBuildCmd.CombinedOutput(); err != nil {
+		t.Fatalf("npm run build failed: %v\n%s", err, output)
+	}
+
+	// Add replace directive for local juango
+	goModPath := filepath.Join(projectDir, "go.mod")
+	goModContent, err := os.ReadFile(goModPath)
+	if err != nil {
+		t.Fatalf("Failed to read go.mod: %v", err)
+	}
+	replaceDirective := "\nreplace github.com/juanfont/juango => " + projectRoot() + "\n"
+	if err := os.WriteFile(goModPath, append(goModContent, []byte(replaceDirective)...), 0644); err != nil {
+		t.Fatalf("Failed to update go.mod: %v", err)
+	}
+
+	// Run go mod tidy
+	tidyCmd := exec.Command("go", "mod", "tidy")
+	tidyCmd.Dir = projectDir
+	if output, err := tidyCmd.CombinedOutput(); err != nil {
+		t.Fatalf("go mod tidy failed: %v\n%s", err, output)
+	}
+
+	// Build the app
+	appBuildCmd := exec.Command("go", "build", "-o", "testapp", "./cmd/testapp")
+	appBuildCmd.Dir = projectDir
+	if output, err := appBuildCmd.CombinedOutput(); err != nil {
+		t.Fatalf("go build failed: %v\n%s", err, output)
+	}
+
+	// Start mock OIDC server using juango mockoidc command
+	mockOIDCPort := "19080"
+	mockOIDCUsers := `[{"subject":"test-user","email":"test@example.com","preferred_username":"testuser","email_verified":true}]`
+
+	mockOIDCCmd := exec.Command(juangoBin, "mockoidc")
+	mockOIDCCmd.Env = append(os.Environ(),
+		"MOCKOIDC_CLIENT_ID=test-client",
+		"MOCKOIDC_CLIENT_SECRET=test-secret",
+		"MOCKOIDC_ADDR=localhost",
+		"MOCKOIDC_PORT="+mockOIDCPort,
+		"MOCKOIDC_USERS="+mockOIDCUsers,
+	)
+	var mockOIDCOutput strings.Builder
+	mockOIDCCmd.Stdout = &mockOIDCOutput
+	mockOIDCCmd.Stderr = &mockOIDCOutput
+	if err := mockOIDCCmd.Start(); err != nil {
+		t.Fatalf("Failed to start mock OIDC: %v", err)
+	}
+	defer func() {
+		mockOIDCCmd.Process.Kill()
+		mockOIDCCmd.Wait()
+	}()
+
+	// Wait for mock OIDC to be ready
+	// mockoidc serves the OIDC endpoints under /oidc path
+	mockOIDCBaseURL := "http://127.0.0.1:" + mockOIDCPort
+	wellKnownURL := mockOIDCBaseURL + "/oidc/.well-known/openid-configuration"
+	t.Logf("Waiting for mock OIDC at %s", wellKnownURL)
+	if !waitForEndpoint(wellKnownURL, 10*time.Second) {
+		t.Fatalf("Mock OIDC server did not become ready. Output:\n%s", mockOIDCOutput.String())
+	}
+
+	// Fetch the actual issuer from the well-known config
+	resp, err := http.Get(wellKnownURL)
+	if err != nil {
+		t.Fatalf("Failed to fetch well-known config: %v", err)
+	}
+	bodyBytes, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatalf("Failed to read well-known config body: %v", err)
+	}
+	t.Logf("Well-known config response: %s", string(bodyBytes))
+
+	var oidcConfig map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &oidcConfig); err != nil {
+		t.Fatalf("Failed to decode well-known config: %v\nBody: %s", err, string(bodyBytes))
+	}
+	mockOIDCIssuer, ok := oidcConfig["issuer"].(string)
+	if !ok {
+		t.Fatalf("Issuer not found or not a string in well-known config: %v", oidcConfig)
+	}
+	t.Logf("Mock OIDC ready, issuer: %s", mockOIDCIssuer)
+
+	// Create config file
+	appPort := "19081"
+	configPath := filepath.Join(projectDir, "config.yml")
+	config := `
+listen_addr: ":` + appPort + `"
+advertise_url: "http://localhost:` + appPort + `"
+admin_mode_timeout: 30m
+
+database:
+  path: "` + projectDir + `/test.db"
+
+session:
+  cookie_name: "testapp_session"
+  cookie_expiry: 24h
+  authentication_key: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  encryption_key: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+oidc:
+  issuer: "` + mockOIDCIssuer + `"
+  client_id: "test-client"
+  client_secret: "test-secret"
+  scopes:
+    - openid
+    - profile
+    - email
+
+redis:
+  addr: "localhost:6379"
+
+logging:
+  level: debug
+  format: text
+`
+	if err := os.WriteFile(configPath, []byte(config), 0644); err != nil {
+		t.Fatalf("Failed to write config: %v", err)
+	}
+
+	// Start the app
+	appCmd := exec.Command(filepath.Join(projectDir, "testapp"), "serve", "-c", configPath)
+	appCmd.Dir = projectDir
+	var appOutput strings.Builder
+	appCmd.Stdout = &appOutput
+	appCmd.Stderr = &appOutput
+	if err := appCmd.Start(); err != nil {
+		t.Fatalf("Failed to start app: %v", err)
+	}
+	defer func() {
+		appCmd.Process.Kill()
+		appCmd.Wait()
+	}()
+
+	// Wait for app to be ready (session endpoint returns 401 when unauthenticated)
+	appURL := "http://localhost:" + appPort
+	if !waitForEndpointAnyStatus(appURL+"/api/auth/session", 10*time.Second) {
+		t.Fatalf("App server did not become ready. Output:\n%s", appOutput.String())
+	}
+
+	// Test unauthenticated session
+	sessionResp, err := http.Get(appURL + "/api/auth/session")
+	if err != nil {
+		t.Fatalf("Failed to get session: %v", err)
+	}
+	defer sessionResp.Body.Close()
+
+	var sessionData map[string]interface{}
+	if err := json.NewDecoder(sessionResp.Body).Decode(&sessionData); err != nil {
+		t.Fatalf("Failed to decode session: %v", err)
+	}
+
+	if sessionData["authenticated"] != false {
+		t.Errorf("Expected unauthenticated session, got: %v", sessionData)
+	}
+
+	// Test health endpoint
+	healthResp, err := http.Get(appURL + "/api/health")
+	if err != nil {
+		t.Fatalf("Failed to get health: %v", err)
+	}
+	defer healthResp.Body.Close()
+
+	if healthResp.StatusCode != http.StatusOK {
+		t.Errorf("Expected 200 from health endpoint, got: %d", healthResp.StatusCode)
+	}
+
+	var healthData map[string]interface{}
+	if err := json.NewDecoder(healthResp.Body).Decode(&healthData); err != nil {
+		t.Fatalf("Failed to decode health response: %v", err)
+	}
+
+	if healthData["status"] != "ok" {
+		t.Errorf("Expected health status 'ok', got: %v", healthData["status"])
+	}
+
+	if healthData["database"] != "ok" {
+		t.Errorf("Expected database status 'ok', got: %v", healthData["database"])
+	}
+
+	t.Log("Scaffolded app is running with mock OIDC!")
+}
+
+func waitForEndpoint(url string, timeout time.Duration) bool {
+	return waitForEndpointWithStatus(url, timeout, func(status int) bool {
+		return status >= 200 && status < 300
+	})
+}
+
+func waitForEndpointAnyStatus(url string, timeout time.Duration) bool {
+	return waitForEndpointWithStatus(url, timeout, func(status int) bool {
+		return status > 0
+	})
+}
+
+func waitForEndpointWithStatus(url string, timeout time.Duration, acceptStatus func(int) bool) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get(url)
+		if err == nil {
+			status := resp.StatusCode
+			resp.Body.Close()
+			if acceptStatus(status) {
+				return true
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return false
 }

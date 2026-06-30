@@ -9,6 +9,13 @@ import type {
   ImpersonationStatusResponse,
   SessionResponse,
   Notification,
+  UserManagement,
+  UserStats,
+  UpdateUserRequest,
+  AuditLog,
+  AuditLogFilters,
+  AuditLogStats,
+  TaskResponse,
 } from "./types"
 
 const DEFAULT_API_BASE = "/api"
@@ -107,6 +114,58 @@ export class ApiClient {
     return this.request<ImpersonationStatusResponse>(
       "/admin/impersonate/status"
     )
+  }
+
+  // Admin: User Management
+  async getUsers(search?: string): Promise<UserManagement[]> {
+    const params = new URLSearchParams()
+    if (search) params.append("search", search)
+    const query = params.toString()
+    return this.request<UserManagement[]>(`/admin/users${query ? `?${query}` : ""}`)
+  }
+
+  async getUserStats(): Promise<UserStats> {
+    return this.request<UserStats>("/admin/users/stats")
+  }
+
+  async updateUser(userId: string, data: UpdateUserRequest): Promise<UserManagement> {
+    return this.request<UserManagement>(`/admin/users/${userId}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    })
+  }
+
+  // Admin: Audit Logs
+  async getAuditLogs(filters?: AuditLogFilters): Promise<AuditLog[]> {
+    const params = new URLSearchParams()
+    if (filters?.actor_user_id) params.append("actor_user_id", filters.actor_user_id)
+    if (filters?.action) params.append("action", filters.action)
+    if (filters?.resource_type) params.append("resource_type", filters.resource_type)
+    if (filters?.resource_id) params.append("resource_id", filters.resource_id)
+    if (filters?.search) params.append("search", filters.search)
+    if (filters?.start_time) params.append("start_time", filters.start_time)
+    if (filters?.end_time) params.append("end_time", filters.end_time)
+    if (filters?.limit) params.append("limit", filters.limit.toString())
+    if (filters?.offset) params.append("offset", filters.offset.toString())
+    const query = params.toString()
+    return this.request<AuditLog[]>(`/admin/audit-logs${query ? `?${query}` : ""}`)
+  }
+
+  async getAuditLogStats(): Promise<AuditLogStats> {
+    return this.request<AuditLogStats>("/admin/audit-logs/stats")
+  }
+
+  // Tasks
+  async enqueueDummyTask(message: string, count: number): Promise<TaskResponse> {
+    return this.request<TaskResponse>("/admin/tasks/dummy", {
+      method: "POST",
+      body: JSON.stringify({ message, count }),
+    })
+  }
+
+  // Health
+  async healthCheck(): Promise<{ status: string; database: string }> {
+    return this.request<{ status: string; database: string }>("/health")
   }
 
   // Notifications

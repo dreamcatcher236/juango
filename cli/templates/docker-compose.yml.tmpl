@@ -1,0 +1,28 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config.yml:/app/config.yml:ro
+      - app-data:/app/data
+    depends_on:
+      - redis
+
+  worker:
+    build: .
+    command: ["./app", "worker", "-c", "/app/config.yml"]
+    volumes:
+      - ./config.yml:/app/config.yml:ro
+      - app-data:/app/data
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis-data:/data
+
+volumes:
+  app-data:
+  redis-data:

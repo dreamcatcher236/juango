@@ -12,14 +12,18 @@ This project has been created with [Claude](https://claude.ai) (Anthropic's AI a
 
 - **CLI scaffolding** - `juango init myapp` creates a complete project structure
 - **OIDC authentication** - Plug-and-play with any OIDC provider (Entra ID, Okta, Auth0, etc.)
+- **First-user bootstrap** - First OIDC login is automatically promoted to admin
 - **Session management** - Secure cookie-based sessions with SQLite backend
 - **Admin mode** - Time-limited elevated privileges with audit logging
 - **User impersonation** - Debug issues as another user (admin only)
+- **Admin API** - User management, stats, and audit log querying with filtering/pagination
 - **Audit logging** - Track all sensitive operations with actor/impersonator awareness
+- **Health endpoint** - `GET /api/health` with database connectivity check
 - **Frontend serving** - Dev proxy to Vite, embedded SPA in production
 - **SQLite with WAL** - Simple, fast, single-file database
 - **Background tasks** - Asynq integration for Redis-backed job queues
-- **React UI library** - Pre-built components with shadcn/ui styling
+- **React UI library** - Pre-built admin pages, components with shadcn/ui styling
+- **Generated CLI commands** - `make-admin`, `list-admins`, `remove-admin`, `db backup`, `db stats`
 
 ## Installation
 
@@ -51,27 +55,33 @@ A generated project looks like this:
 ```
 myapp/
 ├── cmd/myapp/
-│   ├── myapp.go           # Entry point
+│   ├── myapp.go              # Entry point
 │   └── cli/
-│       ├── root.go        # CLI setup
-│       └── serve.go       # Server command
+│       ├── root.go           # CLI setup
+│       ├── serve.go          # Server command
+│       ├── make_admin.go     # Promote user to admin
+│       ├── list_admins.go    # List admin users
+│       ├── remove_admin.go   # Revoke admin from user
+│       └── db.go             # Database utilities (backup, stats)
 ├── internal/
 │   ├── api/
-│   │   └── app.go         # API routes and handlers
+│   │   └── app.go            # API routes and handlers
 │   ├── database/
-│   │   ├── db.go          # Database wrapper
+│   │   ├── db.go             # Database wrapper
 │   │   └── sql/
-│   │       └── schema.sql # Your tables
+│   │       └── schema.sql    # Your tables
 │   └── types/
-│       └── config.go      # Configuration struct
+│       └── config.go         # Configuration struct
 ├── frontend/
 │   ├── src/
-│   │   ├── App.tsx        # React app
-│   │   ├── pages/         # Your pages
-│   │   └── components/    # Your components
+│   │   ├── App.tsx           # React app
+│   │   ├── pages/            # Your pages (including admin/)
+│   │   ├── components/       # Your components
+│   │   ├── contexts/         # Auth, Admin, Breadcrumb contexts
+│   │   └── lib/              # API client, types, utilities
 │   ├── package.json
 │   └── vite.config.ts
-├── app.go                 # Main application
+├── app.go                    # Main application
 ├── go.mod
 ├── config.example.yml
 └── .gitignore
@@ -102,6 +112,58 @@ juango dev
 ### `juango version`
 
 Shows version information.
+
+## Generated Project CLI Commands
+
+Every scaffolded project includes these commands out of the box:
+
+### `myapp serve`
+
+Starts the HTTP server.
+
+```bash
+myapp serve -c config.yml
+```
+
+### `myapp make-admin <email>`
+
+Promotes a user to admin by email address.
+
+```bash
+myapp make-admin -c config.yml user@example.com
+```
+
+### `myapp list-admins`
+
+Lists all admin users.
+
+```bash
+myapp list-admins -c config.yml
+```
+
+### `myapp remove-admin <email>`
+
+Revokes admin privileges from a user. Refuses to remove the last admin.
+
+```bash
+myapp remove-admin -c config.yml user@example.com
+```
+
+### `myapp db backup <path>`
+
+Creates a database backup using SQLite `VACUUM INTO`.
+
+```bash
+myapp db backup -c config.yml /backups/myapp.db
+```
+
+### `myapp db stats`
+
+Shows database statistics: user count, admin count, audit log entries, and file size.
+
+```bash
+myapp db stats -c config.yml
+```
 
 ## Go Library
 
@@ -146,29 +208,54 @@ router.HandleFunc("/api/auth/login", handlers.LoginHandler)
 router.HandleFunc("/api/auth/logout", handlers.LogoutHandler).Methods("POST")
 router.HandleFunc(provider.CallbackPath(), handlers.CallbackHandler)
 
+// Enable first-user bootstrap (first OIDC login gets auto-promoted to admin)
+handlers.WithUserCounter(database)
+
 // Protect routes
 middleware := auth.NewSessionMiddleware(sessionStore, "session", userStore, auditLogger, 30*time.Minute)
 router.HandleFunc("/api/protected", middleware.RequireAuth(myHandler))
 router.HandleFunc("/api/admin-only", middleware.RequireAuth(middleware.RequireAdmin(adminHandler)))
 ```
 
+**Interfaces**: Your database layer implements these to integrate with the auth system:
+
+- `auth.UserStore` - `CreateOrUpdateUserFromClaim`, `GetUserByID`
+- `auth.AuditLogger` - `CreateAuditLog`
+- `auth.AdminUserStore` - Extends UserStore with `GetAllUsers`, `GetUserByEmail`, `UpdateUser`, `CountUsers`, `CountAdminUsers`, `CountActiveUsers`, `CountNewUsers`
+- `auth.AdminAuditStore` - Extends AuditLogger with `GetAuditLogs`, `CountAuditLogs`, `GetDistinctActions`, `GetDistinctResourceTypes`
+- `auth.UserCounter` - `CountUsers` (used for first-user bootstrap)
+
 ### `juango/admin`
 
-Admin mode and impersonation handlers.
+Admin mode, impersonation, user management API, audit log API, and health check.
 
 ```go
 import "github.com/juanfont/juango/admin"
 
+// Admin mode and impersonation
 handlers := admin.NewHandlers(sessionStore, "session", userStore, auditLogger, 30*time.Minute)
 
-// Admin mode (time-limited elevation)
 router.HandleFunc("/api/admin/mode/enable", middleware.RequireAdmin(handlers.AdminModeEnableHandler)).Methods("POST")
 router.HandleFunc("/api/admin/mode/disable", middleware.RequireAdmin(handlers.AdminModeDisableHandler)).Methods("POST")
 router.HandleFunc("/api/admin/mode/status", handlers.AdminModeStatusHandler).Methods("GET")
 
-// Impersonation
 router.HandleFunc("/api/admin/impersonate/start", middleware.RequireAdminMode(handlers.ImpersonationStartHandler)).Methods("POST")
 router.HandleFunc("/api/admin/impersonate/stop", handlers.ImpersonationStopHandler).Methods("POST")
+
+// Admin API (user management + audit logs)
+adminAPI := admin.NewAdminAPIHandlers(adminUserStore, adminAuditStore)
+
+router.HandleFunc("/api/admin/users/stats", middleware.RequireAdminMode(adminAPI.GetUserStatsHandler)).Methods("GET")
+router.HandleFunc("/api/admin/users", middleware.RequireAdminMode(adminAPI.ListUsersHandler)).Methods("GET")
+router.HandleFunc("/api/admin/users/{id}", middleware.RequireAdminMode(adminAPI.GetUserHandler)).Methods("GET")
+router.HandleFunc("/api/admin/users/{id}", middleware.RequireAdminMode(adminAPI.UpdateUserHandler)).Methods("PATCH")
+
+router.HandleFunc("/api/admin/audit-logs/stats", middleware.RequireAdminMode(adminAPI.GetAuditLogStatsHandler)).Methods("GET")
+router.HandleFunc("/api/admin/audit-logs", middleware.RequireAdminMode(adminAPI.ListAuditLogsHandler)).Methods("GET")
+
+// Health check (no auth required)
+healthHandler := admin.NewHealthHandler(database) // database implements admin.DBPinger
+router.HandleFunc("/api/health", healthHandler.ServeHTTP).Methods("GET")
 ```
 
 ### `juango/middleware`
@@ -228,8 +315,16 @@ Common types used across packages.
 ```go
 import "github.com/juanfont/juango/types"
 
-// types.User, types.OIDCClaims, types.AuditLog,
-// types.AdminModeState, types.ImpersonationState, etc.
+// Core types
+// types.User, types.OIDCClaims, types.OIDCConfig
+// types.AdminModeState, types.ImpersonationState
+
+// Audit logging
+// types.AuditLog, types.AuditLogFilter
+
+// Admin API
+// types.UserStats, types.AuditLogStats
+// types.UpdateUserRequest, types.HealthResponse
 ```
 
 ## Frontend Components
@@ -237,7 +332,9 @@ import "github.com/juanfont/juango/types"
 Scaffolded projects include a complete React frontend with:
 
 - **Contexts**: `AuthContext`, `AdminContext`, `BreadcrumbContext`
-- **Components**: `ProtectedRoute`, `Layout`, UI components (Button, Card, etc.)
+- **Components**: `ProtectedRoute`, `Layout`, `AdminGuard`, `AdminModeToggle`, `ImpersonationBanner`, `AuditLogDetailModal`
+- **Admin pages**: `admin/Users` (user management with sorting/pagination), `admin/AuditLogs` (filterable logs with CSV export)
+- **UI components**: Button, Card, Dialog, Table, Badge, Select, Input, Tooltip, etc. (shadcn/ui)
 - **Utilities**: `ApiClient` for backend communication, `cn()` for class names
 
 ### Example App.tsx
@@ -306,6 +403,29 @@ Generate secure keys:
 openssl rand -hex 16  # generates 32-character hex string
 ```
 
+## API Endpoints
+
+Every scaffolded project comes with these endpoints pre-wired:
+
+| Endpoint | Method | Auth | Description |
+|---|---|---|---|
+| `/api/health` | GET | None | Health check with database status |
+| `/api/auth/login` | GET | None | Initiates OIDC login flow |
+| `/api/auth/logout` | POST | None | Destroys session |
+| `/api/auth/session` | GET | None | Returns current session info |
+| `/api/admin/mode/status` | GET | Auth | Admin mode status |
+| `/api/admin/mode/enable` | POST | Admin | Enable admin mode (with reason) |
+| `/api/admin/mode/disable` | POST | Admin | Disable admin mode |
+| `/api/admin/impersonate/start` | POST | Admin Mode | Start impersonating a user |
+| `/api/admin/impersonate/stop` | POST | Auth | Stop impersonation |
+| `/api/admin/impersonate/status` | GET | Auth | Impersonation status |
+| `/api/admin/users` | GET | Admin Mode | List users (with search) |
+| `/api/admin/users/stats` | GET | Admin Mode | User statistics |
+| `/api/admin/users/{id}` | GET | Admin Mode | Get user details |
+| `/api/admin/users/{id}` | PATCH | Admin Mode | Update user (admin flag, active status) |
+| `/api/admin/audit-logs` | GET | Admin Mode | List audit logs (with filtering/pagination) |
+| `/api/admin/audit-logs/stats` | GET | Admin Mode | Audit log statistics |
+
 ## Testing
 
 The project includes comprehensive integration tests:
@@ -324,8 +444,8 @@ go test ./integration/... -v
 
 ### Test Coverage
 
-- **API Tests**: Session management, OIDC flow, protected endpoints, logout
-- **Browser Tests**: Page loading, login flow with real Chrome (headless)
+- **API Tests**: Session management, OIDC flow, protected endpoints, logout, health endpoint, first-user bootstrap
+- **Scaffolding Tests**: Project structure validation, module path handling, frontend dependencies/imports, full build, mock OIDC end-to-end
 
 ## Building for Production
 

@@ -33,4 +33,5 @@ func init() {
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(devCmd)
 	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(mockOidcCmd)
 }

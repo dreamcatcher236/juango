@@ -1,0 +1,67 @@
+package cli
+
+import (
+	"context"
+	"fmt"
+	"os"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+	"github.com/spf13/cobra"
+	"{{.ModulePath}}/internal/database"
+	"{{.ModulePath}}/internal/types"
+)
+
+var makeAdminFlags struct {
+	configPath string
+}
+
+var makeAdminCmd = &cobra.Command{
+	Use:   "make-admin <email>",
+	Short: "Grant admin privileges to a user",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runMakeAdmin,
+}
+
+func init() {
+	makeAdminCmd.Flags().StringVarP(&makeAdminFlags.configPath, "config", "c", "", "Path to config file")
+}
+
+func runMakeAdmin(cmd *cobra.Command, args []string) error {
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout})
+
+	if err := types.ReadViperConfig(makeAdminFlags.configPath, makeAdminFlags.configPath != ""); err != nil {
+		return err
+	}
+	config, err := types.GetConfig()
+	if err != nil {
+		return err
+	}
+
+	db, err := database.New(config.Database.Path)
+	if err != nil {
+		return fmt.Errorf("opening database: %w", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	email := args[0]
+
+	user, err := db.GetUserByEmail(ctx, email)
+	if err != nil {
+		return fmt.Errorf("user not found: %s", email)
+	}
+
+	if user.IsAdmin {
+		fmt.Printf("User %s is already an admin\n", email)
+		return nil
+	}
+
+	user.IsAdmin = true
+	if err := db.UpdateUser(ctx, user); err != nil {
+		return fmt.Errorf("updating user: %w", err)
+	}
+
+	fmt.Printf("User %s has been granted admin privileges\n", email)
+	return nil
+}

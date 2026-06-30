@@ -28,7 +28,11 @@ oidc:
     - profile
     - email
 
-# Redis configuration (for task queue)
+# Background tasks (Asynq task queue, requires Redis)
+tasks:
+  enabled: false
+
+# Redis configuration (only used when tasks are enabled)
 redis:
   addr: "localhost:6379"
   password: ""

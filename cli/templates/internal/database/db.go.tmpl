@@ -3,6 +3,9 @@ package database
 import (
 	"context"
 	_ "embed"
+	"fmt"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/juanfont/juango/database"
@@ -92,4 +95,211 @@ func (d *Database) CreateAuditLog(ctx context.Context, log *juangotypes.AuditLog
 // WithTx executes a function within a database transaction.
 func (d *Database) WithTx(ctx context.Context, fn func(*sqlx.Tx) error) error {
 	return d.Database.WithTx(ctx, fn)
+}
+
+// PingContext checks the database connection health.
+func (d *Database) PingContext(ctx context.Context) error {
+	return d.DB().PingContext(ctx)
+}
+
+// --- AdminUserStore implementation ---
+
+// GetAllUsers returns all users, optionally filtered by search string.
+func (d *Database) GetAllUsers(ctx context.Context, search string) ([]juangotypes.User, error) {
+	var users []juangotypes.User
+	if search != "" {
+		pattern := "%" + search + "%"
+		err := d.DB().SelectContext(ctx, &users,
+			"SELECT * FROM users WHERE (email LIKE ? OR name LIKE ? OR display_name LIKE ?) ORDER BY created_at DESC",
+			pattern, pattern, pattern)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		err := d.DB().SelectContext(ctx, &users, "SELECT * FROM users ORDER BY created_at DESC")
+		if err != nil {
+			return nil, err
+		}
+	}
+	return users, nil
+}
+
+// GetUserByEmail retrieves a user by email address.
+func (d *Database) GetUserByEmail(ctx context.Context, email string) (*juangotypes.User, error) {
+	var user juangotypes.User
+	err := d.DB().GetContext(ctx, &user, "SELECT * FROM users WHERE email = ?", email)
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+// UpdateUser updates all mutable fields of a user.
+func (d *Database) UpdateUser(ctx context.Context, user *juangotypes.User) error {
+	_, err := d.DB().NamedExecContext(ctx, `
+		UPDATE users SET
+			email = :email, name = :name, display_name = :display_name,
+			profile_pic_url = :profile_pic_url, is_admin = :is_admin,
+			deleted_at = :deleted_at, modified_at = CURRENT_TIMESTAMP
+		WHERE id = :id
+	`, user)
+	return err
+}
+
+// CountUsers returns the total number of users.
+func (d *Database) CountUsers(ctx context.Context) (int, error) {
+	var count int
+	err := d.DB().GetContext(ctx, &count, "SELECT COUNT(*) FROM users")
+	return count, err
+}
+
+// CountAdminUsers returns the number of admin users.
+func (d *Database) CountAdminUsers(ctx context.Context) (int, error) {
+	var count int
+	err := d.DB().GetContext(ctx, &count, "SELECT COUNT(*) FROM users WHERE is_admin = 1 AND deleted_at IS NULL")
+	return count, err
+}
+
+// CountActiveUsers returns the number of users who logged in since the given SQLite date modifier.
+func (d *Database) CountActiveUsers(ctx context.Context, since string) (int, error) {
+	var count int
+	err := d.DB().GetContext(ctx, &count,
+		"SELECT COUNT(*) FROM users WHERE last_login >= datetime('now', ?) AND deleted_at IS NULL", since)
+	return count, err
+}
+
+// CountNewUsers returns the number of users created since the given SQLite date modifier.
+func (d *Database) CountNewUsers(ctx context.Context, since string) (int, error) {
+	var count int
+	err := d.DB().GetContext(ctx, &count,
+		"SELECT COUNT(*) FROM users WHERE created_at >= datetime('now', ?)", since)
+	return count, err
+}
+
+// GetAdminUsers returns all admin users.
+func (d *Database) GetAdminUsers(ctx context.Context) ([]juangotypes.User, error) {
+	var users []juangotypes.User
+	err := d.DB().SelectContext(ctx, &users,
+		"SELECT * FROM users WHERE is_admin = 1 AND deleted_at IS NULL ORDER BY email")
+	if err != nil {
+		return nil, err
+	}
+	return users, nil
+}
+
+// --- AdminAuditStore implementation ---
+
+// GetAuditLogs returns audit logs matching the given filter.
+func (d *Database) GetAuditLogs(ctx context.Context, filter juangotypes.AuditLogFilter) ([]juangotypes.AuditLog, error) {
+	query := "SELECT audit_log.*, COALESCE(users.display_name, users.email, '') as actor_name FROM audit_log LEFT JOIN users ON audit_log.actor_user_id = users.id"
+	var conditions []string
+	var args []interface{}
+
+	if filter.ActorUserID != "" {
+		conditions = append(conditions, "audit_log.actor_user_id = ?")
+		args = append(args, filter.ActorUserID)
+	}
+	if filter.Action != "" {
+		conditions = append(conditions, "audit_log.action = ?")
+		args = append(args, filter.Action)
+	}
+	if filter.ResourceType != "" {
+		conditions = append(conditions, "audit_log.resource_type = ?")
+		args = append(args, filter.ResourceType)
+	}
+	if filter.ResourceID != "" {
+		conditions = append(conditions, "audit_log.resource_id = ?")
+		args = append(args, filter.ResourceID)
+	}
+	if filter.Search != "" {
+		pattern := "%" + filter.Search + "%"
+		conditions = append(conditions, "(users.email LIKE ? OR users.display_name LIKE ? OR audit_log.action LIKE ? OR audit_log.resource_id LIKE ?)")
+		args = append(args, pattern, pattern, pattern, pattern)
+	}
+	if filter.StartTime != nil {
+		conditions = append(conditions, "audit_log.timestamp >= ?")
+		args = append(args, filter.StartTime.Format(time.RFC3339))
+	}
+	if filter.EndTime != nil {
+		conditions = append(conditions, "audit_log.timestamp <= ?")
+		args = append(args, filter.EndTime.Format(time.RFC3339))
+	}
+
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	query += " ORDER BY audit_log.timestamp DESC"
+
+	if filter.Limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", filter.Limit)
+	}
+	if filter.Offset > 0 {
+		query += fmt.Sprintf(" OFFSET %d", filter.Offset)
+	}
+
+	var logs []juangotypes.AuditLog
+	err := d.DB().SelectContext(ctx, &logs, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	return logs, nil
+}
+
+// CountAuditLogs returns the count of audit logs matching the given filter.
+func (d *Database) CountAuditLogs(ctx context.Context, filter juangotypes.AuditLogFilter) (int, error) {
+	query := "SELECT COUNT(*) FROM audit_log"
+	var conditions []string
+	var args []interface{}
+
+	if filter.ActorUserID != "" {
+		conditions = append(conditions, "actor_user_id = ?")
+		args = append(args, filter.ActorUserID)
+	}
+	if filter.Action != "" {
+		conditions = append(conditions, "action = ?")
+		args = append(args, filter.Action)
+	}
+	if filter.ResourceType != "" {
+		conditions = append(conditions, "resource_type = ?")
+		args = append(args, filter.ResourceType)
+	}
+	if filter.StartTime != nil {
+		conditions = append(conditions, "timestamp >= ?")
+		args = append(args, filter.StartTime.Format(time.RFC3339))
+	}
+	if filter.EndTime != nil {
+		conditions = append(conditions, "timestamp <= ?")
+		args = append(args, filter.EndTime.Format(time.RFC3339))
+	}
+
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	var count int
+	err := d.DB().GetContext(ctx, &count, query, args...)
+	return count, err
+}
+
+// GetDistinctActions returns all distinct audit log actions.
+func (d *Database) GetDistinctActions(ctx context.Context) ([]string, error) {
+	var actions []string
+	err := d.DB().SelectContext(ctx, &actions,
+		"SELECT DISTINCT action FROM audit_log ORDER BY action")
+	if err != nil {
+		return nil, err
+	}
+	return actions, nil
+}
+
+// GetDistinctResourceTypes returns all distinct audit log resource types.
+func (d *Database) GetDistinctResourceTypes(ctx context.Context) ([]string, error) {
+	var types []string
+	err := d.DB().SelectContext(ctx, &types,
+		"SELECT DISTINCT resource_type FROM audit_log ORDER BY resource_type")
+	if err != nil {
+		return nil, err
+	}
+	return types, nil
 }

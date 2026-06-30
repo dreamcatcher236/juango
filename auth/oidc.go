@@ -232,6 +232,32 @@ type AuditLogger interface {
 	CreateAuditLog(ctx context.Context, log *types.AuditLog) error
 }
 
+// AdminUserStore extends UserStore with admin user management operations.
+type AdminUserStore interface {
+	UserStore
+	GetAllUsers(ctx context.Context, search string) ([]types.User, error)
+	GetUserByEmail(ctx context.Context, email string) (*types.User, error)
+	UpdateUser(ctx context.Context, user *types.User) error
+	CountUsers(ctx context.Context) (int, error)
+	CountAdminUsers(ctx context.Context) (int, error)
+	CountActiveUsers(ctx context.Context, since string) (int, error)
+	CountNewUsers(ctx context.Context, since string) (int, error)
+}
+
+// AdminAuditStore extends AuditLogger with admin audit log query operations.
+type AdminAuditStore interface {
+	AuditLogger
+	GetAuditLogs(ctx context.Context, filter types.AuditLogFilter) ([]types.AuditLog, error)
+	CountAuditLogs(ctx context.Context, filter types.AuditLogFilter) (int, error)
+	GetDistinctActions(ctx context.Context) ([]string, error)
+	GetDistinctResourceTypes(ctx context.Context) ([]string, error)
+}
+
+// UserCounter is used for first-user bootstrap to check if any users exist.
+type UserCounter interface {
+	CountUsers(ctx context.Context) (int, error)
+}
+
 // OIDCHandlers provides HTTP handlers for OIDC authentication.
 type OIDCHandlers struct {
 	provider     *OIDCProvider
@@ -239,6 +265,12 @@ type OIDCHandlers struct {
 	cookieName   string
 	userStore    UserStore
 	auditLogger  AuditLogger
+	userCounter  UserCounter
+}
+
+// WithUserCounter sets the UserCounter for first-user bootstrap.
+func (h *OIDCHandlers) WithUserCounter(uc UserCounter) {
+	h.userCounter = uc
 }
 
 // NewOIDCHandlers creates new OIDC handlers.
@@ -339,6 +371,42 @@ func (h *OIDCHandlers) CallbackHandler(w http.ResponseWriter, r *http.Request) {
 	if err := h.userStore.UpdateLastLogin(ctx, user.ID); err != nil {
 		types.WriteHTTPError(w, err)
 		return
+	}
+
+	// First-user bootstrap: promote the first user to admin
+	if h.userCounter != nil && !user.IsAdmin {
+		if count, err := h.userCounter.CountUsers(ctx); err == nil && count == 1 {
+			// This is the only user — promote to admin
+			if adminStore, ok := h.userStore.(interface {
+				UpdateUser(ctx context.Context, user *types.User) error
+			}); ok {
+				user.IsAdmin = true
+				if err := adminStore.UpdateUser(ctx, user); err != nil {
+					log.Error().Err(err).Msg("Failed to bootstrap first user as admin")
+				} else {
+					log.Info().
+						Str("user_id", user.ID.String()).
+						Str("email", user.Email).
+						Msg("First user bootstrapped as admin")
+
+					if h.auditLogger != nil {
+						bootstrapLog := types.NewAuditLog(
+							&types.NullUUID{UUID: user.ID, Valid: true},
+							types.ActionFirstUserBootstrap,
+							types.ResourceTypeUser,
+							user.ID.String(),
+						).WithChanges(map[string]interface{}{
+							"email":  user.Email,
+							"reason": "first user in the system",
+						}).WithIPAddress(GetClientIP(r)).WithUserAgent(r.UserAgent())
+
+						if err := h.auditLogger.CreateAuditLog(ctx, bootstrapLog); err != nil {
+							log.Error().Err(err).Msg("Failed to create audit log for first user bootstrap")
+						}
+					}
+				}
+			}
+		}
 	}
 
 	// Create audit log

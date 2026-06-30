@@ -94,10 +94,51 @@ export interface AuditLogFilters {
   action?: string
   resource_type?: string
   resource_id?: string
+  search?: string
   start_time?: string
   end_time?: string
   limit?: number
   offset?: number
+}
+
+// User Management (admin)
+export interface UserManagement extends User {
+  // Extend with any extra admin-visible fields
+}
+
+export interface UserStats {
+  total_users: number
+  admin_users: number
+  active_users_30d: number
+  active_users_7d: number
+  active_users_24h: number
+  new_users_30d: number
+  new_users_7d: number
+  inactive_users: number
+}
+
+export interface UpdateUserRequest {
+  is_admin?: boolean
+  name?: string
+  active?: boolean
+}
+
+// Audit Log Stats
+export interface AuditLogStats {
+  total_entries: number
+  entries_today: number
+  unique_actions: number
+  top_actions?: string[]
+  top_resource_types?: string[]
+}
+
+// Tasks
+export interface TaskResponse {
+  success: boolean
+  task_id: string
+  queue: string
+  message?: string
+  count?: number
 }
 
 // Notifications

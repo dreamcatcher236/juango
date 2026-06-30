@@ -1,0 +1,16 @@
+# Build artifacts
+juango
+integration.test
+
+# Dev test environment
+dev-test/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

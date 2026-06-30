@@ -1,0 +1,35 @@
+# {{.ProjectName}} development tasks
+
+set positional-arguments
+
+default:
+    @just --list
+
+# Run the dev environment (Vite + Go) via the juango CLI
+dev:
+    juango dev
+
+# Build the frontend and the backend binary
+build:
+    ./scripts/build_frontend.sh
+    go build -o {{.ProjectName}} ./cmd/{{.ProjectName}}
+
+# Run the API server
+serve:
+    go run ./cmd/{{.ProjectName}} serve
+
+# Run the background task worker (requires Redis and tasks.enabled: true)
+worker:
+    go run ./cmd/{{.ProjectName}} worker
+
+# Run tests
+test:
+    go test ./...
+
+# Back up the SQLite database
+db-backup path:
+    go run ./cmd/{{.ProjectName}} db backup "$1"
+
+# Show database statistics
+db-stats:
+    go run ./cmd/{{.ProjectName}} db stats

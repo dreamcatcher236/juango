@@ -8,6 +8,7 @@ import (
 	"github.com/gorilla/sessions"
 	"github.com/juanfont/juango/admin"
 	"github.com/juanfont/juango/auth"
+	"github.com/juanfont/juango/tasks"
 	juangotypes "github.com/juanfont/juango/types"
 	"github.com/michaeljs1990/sqlitestore"
 	"github.com/rs/zerolog"
@@ -22,15 +23,18 @@ type App struct {
 	oidcProvider *auth.OIDCProvider
 	router       *mux.Router
 
-	sessionStore     *sqlitestore.SqliteStore
+	sessionStore      *sqlitestore.SqliteStore
 	sessionMiddleware *auth.SessionMiddleware
-	oidcHandlers     *auth.OIDCHandlers
-	adminHandlers    *admin.Handlers
+	oidcHandlers      *auth.OIDCHandlers
+	adminHandlers     *admin.Handlers
+	adminAPIHandlers  *admin.AdminAPIHandlers
+	healthHandler     *admin.HealthHandler
+	taskClient        *tasks.Client
 
 	logger zerolog.Logger
 }
 
-func NewApp(ctx context.Context, config *types.Config, database *database.Database, router *mux.Router) (*App, error) {
+func NewApp(ctx context.Context, config *types.Config, database *database.Database, taskClient *tasks.Client, router *mux.Router) (*App, error) {
 	// Setup OIDC provider
 	oidcProvider, err := auth.NewOIDCProvider(ctx, auth.OIDCProviderConfig{
 		ServerURL: config.AdvertiseURL,
@@ -72,6 +76,7 @@ func NewApp(ctx context.Context, config *types.Config, database *database.Databa
 		oidcProvider: oidcProvider,
 		sessionStore: sessionStore,
 		router:       router,
+		taskClient:   taskClient,
 		logger:       log.Logger,
 	}
 
@@ -93,6 +98,9 @@ func NewApp(ctx context.Context, config *types.Config, database *database.Databa
 		database,
 	)
 
+	// Wire up first-user bootstrap
+	app.oidcHandlers.WithUserCounter(database)
+
 	// Setup admin handlers
 	app.adminHandlers = admin.NewHandlers(
 		sessionStore,
@@ -102,6 +110,12 @@ func NewApp(ctx context.Context, config *types.Config, database *database.Databa
 		config.AdminModeTimeout,
 	)
 
+	// Setup admin API handlers
+	app.adminAPIHandlers = admin.NewAdminAPIHandlers(database, database)
+
+	// Setup health handler
+	app.healthHandler = admin.NewHealthHandler(database)
+
 	// Register routes
 	app.registerRoutes()
 
@@ -109,6 +123,9 @@ func NewApp(ctx context.Context, config *types.Config, database *database.Databa
 }
 
 func (a *App) registerRoutes() {
+	// Health check (no auth required)
+	a.router.HandleFunc("/api/health", a.healthHandler.ServeHTTP).Methods("GET")
+
 	// Auth routes
 	a.router.HandleFunc(a.oidcProvider.CallbackPath(), a.oidcHandlers.CallbackHandler)
 	a.router.HandleFunc("/api/auth/login", a.oidcHandlers.LoginHandler)
@@ -133,6 +150,32 @@ func (a *App) registerRoutes() {
 		a.sessionMiddleware.RequireAuth(a.adminHandlers.ImpersonationStopHandler)).Methods("POST")
 	a.router.HandleFunc("/api/admin/impersonate/status",
 		a.sessionMiddleware.RequireAuth(a.adminHandlers.ImpersonationStatusHandler)).Methods("GET")
+
+	// Admin API routes (stats BEFORE {id} to avoid mux collision)
+	a.router.HandleFunc("/api/admin/users/stats",
+		a.sessionMiddleware.RequireAuth(
+			a.sessionMiddleware.RequireAdminMode(a.adminAPIHandlers.GetUserStatsHandler))).Methods("GET")
+	a.router.HandleFunc("/api/admin/users",
+		a.sessionMiddleware.RequireAuth(
+			a.sessionMiddleware.RequireAdminMode(a.adminAPIHandlers.ListUsersHandler))).Methods("GET")
+	a.router.HandleFunc("/api/admin/users/{id}",
+		a.sessionMiddleware.RequireAuth(
+			a.sessionMiddleware.RequireAdminMode(a.adminAPIHandlers.GetUserHandler))).Methods("GET")
+	a.router.HandleFunc("/api/admin/users/{id}",
+		a.sessionMiddleware.RequireAuth(
+			a.sessionMiddleware.RequireAdminMode(a.adminAPIHandlers.UpdateUserHandler))).Methods("PATCH")
+
+	a.router.HandleFunc("/api/admin/audit-logs/stats",
+		a.sessionMiddleware.RequireAuth(
+			a.sessionMiddleware.RequireAdminMode(a.adminAPIHandlers.GetAuditLogStatsHandler))).Methods("GET")
+	a.router.HandleFunc("/api/admin/audit-logs",
+		a.sessionMiddleware.RequireAuth(
+			a.sessionMiddleware.RequireAdminMode(a.adminAPIHandlers.ListAuditLogsHandler))).Methods("GET")
+
+	// Task routes
+	a.router.HandleFunc("/api/admin/tasks/dummy",
+		a.sessionMiddleware.RequireAuth(
+			a.sessionMiddleware.RequireAdminMode(a.TasksDummyHandler))).Methods("POST")
 
 	// Add your application-specific routes here
 	// Example:
