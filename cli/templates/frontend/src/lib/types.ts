@@ -101,10 +101,8 @@ export interface AuditLogFilters {
   offset?: number
 }
 
-// User Management (admin)
-export interface UserManagement extends User {
-  // Extend with any extra admin-visible fields
-}
+// User Management (admin). Alias for now; extend with admin-visible fields as needed.
+export type UserManagement = User
 
 export interface UserStats {
   total_users: number

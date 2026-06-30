@@ -151,7 +151,8 @@ func runInit(cmd *cobra.Command, args []string) error {
 	fmt.Printf("\n✓ Project created successfully!\n\n")
 	fmt.Printf("Next steps:\n")
 	fmt.Printf("  cd %s\n", projectName)
-	fmt.Printf("  # Configure config.yaml with your OIDC settings\n")
+	fmt.Printf("  cp config.example.yml config.yml\n")
+	fmt.Printf("  # Edit config.yml with your OIDC settings\n")
 	fmt.Printf("  juango dev\n\n")
 	fmt.Printf("Your app will be available at http://localhost:%d\n", initFlags.port)
 

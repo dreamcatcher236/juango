@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 	"github.com/oauth2-proxy/mockoidc"
 )
@@ -178,6 +179,7 @@ func TestBrowserFullLoginFlow(t *testing.T) {
 
 	var finalURL string
 	var cookies []*network.Cookie
+	var sessionJSON string
 
 	err := chromedp.Run(ctx,
 		// Step 1: Go to login
@@ -195,6 +197,18 @@ func TestBrowserFullLoginFlow(t *testing.T) {
 			cookies, err = network.GetCookies().Do(ctx)
 			return err
 		}),
+
+		// Step 3: from the authenticated browser context, fetch the session
+		// endpoint so we verify a real authenticated session, not just a cookie.
+		// fetch returns the raw (compact) server JSON, unlike navigating to the
+		// endpoint where Chrome's JSON viewer would reformat it.
+		chromedp.Evaluate(
+			`fetch('/api/auth/session', {credentials: 'include'}).then(r => r.text())`,
+			&sessionJSON,
+			func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
+				return p.WithAwaitPromise(true)
+			},
+		),
 	)
 	if err != nil {
 		t.Fatalf("Browser login flow failed: %v", err)
@@ -214,5 +228,15 @@ func TestBrowserFullLoginFlow(t *testing.T) {
 
 	if !hasSessionCookie {
 		t.Error("Expected session cookie after login")
+	}
+
+	// The cookie alone does not prove authentication; confirm the browser's
+	// session is actually authenticated as the user we queued.
+	t.Logf("Session endpoint (in browser): %s", sessionJSON)
+	if !strings.Contains(sessionJSON, `"authenticated":true`) {
+		t.Errorf("Expected authenticated session in browser, got: %s", sessionJSON)
+	}
+	if !strings.Contains(sessionJSON, "browser@example.com") {
+		t.Errorf("Expected logged-in user browser@example.com in session, got: %s", sessionJSON)
 	}
 }

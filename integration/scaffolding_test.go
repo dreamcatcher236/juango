@@ -377,6 +377,7 @@ func TestScaffoldingProjectStructure(t *testing.T) {
 		".gitignore",
 		".goreleaser.yml",
 		"justfile",
+		"AGENTS.md",
 		"cmd/myproject/myproject.go",
 		"cmd/myproject/cli/root.go",
 		"cmd/myproject/cli/serve.go",
@@ -388,6 +389,7 @@ func TestScaffoldingProjectStructure(t *testing.T) {
 		"internal/api/app.go",
 		"internal/api/tasks.go",
 		"internal/database/db.go",
+		"internal/database/README.md",
 		"internal/database/sql/schema.sql",
 		"internal/tasks/registry.go",
 		"internal/tasks/dummy.go",
@@ -398,6 +400,8 @@ func TestScaffoldingProjectStructure(t *testing.T) {
 		"frontend/index.html",
 		"frontend/src/App.tsx",
 		"frontend/src/main.tsx",
+		"frontend/src/test/setup.ts",
+		"frontend/src/lib/utils.test.ts",
 		"scripts/build_frontend.sh",
 	}
 
@@ -471,6 +475,13 @@ func TestScaffoldingFullBuild(t *testing.T) {
 	distPath := filepath.Join(tmpDir, "testapp", "frontend", "dist", "index.html")
 	if _, err := os.Stat(distPath); os.IsNotExist(err) {
 		t.Error("dist/index.html not created after build")
+	}
+
+	// Run the scaffolded frontend's vitest suite
+	npmTestCmd := exec.Command("npm", "test")
+	npmTestCmd.Dir = filepath.Join(tmpDir, "testapp", "frontend")
+	if output, err := npmTestCmd.CombinedOutput(); err != nil {
+		t.Fatalf("npm test (vitest) failed: %v\n%s", err, output)
 	}
 
 	// Build Go backend (needs frontend dist)

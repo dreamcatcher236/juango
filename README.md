@@ -48,6 +48,10 @@ juango dev
 # Visit http://localhost:8080
 ```
 
+> **Using an AI coding agent?** See [`AGENTS.md`](AGENTS.md) for a concise guide to
+> bootstrapping and extending a project with juango. Every generated project also
+> ships its own `AGENTS.md` tailored to that app.
+
 ## Project Structure
 
 A generated project looks like this:
@@ -62,14 +66,20 @@ myapp/
 │       ├── make_admin.go     # Promote user to admin
 │       ├── list_admins.go    # List admin users
 │       ├── remove_admin.go   # Revoke admin from user
+│       ├── worker.go         # Background task worker
 │       └── db.go             # Database utilities (backup, stats)
 ├── internal/
 │   ├── api/
-│   │   └── app.go            # API routes and handlers
+│   │   ├── app.go            # API routes and handlers
+│   │   └── tasks.go          # Task-enqueueing endpoints
 │   ├── database/
 │   │   ├── db.go             # Database wrapper
+│   │   ├── README.md         # Schema & squibble migration guide
 │   │   └── sql/
 │   │       └── schema.sql    # Your tables
+│   ├── tasks/
+│   │   ├── registry.go       # Task handler registration
+│   │   └── dummy.go          # Example task
 │   └── types/
 │       └── config.go         # Configuration struct
 ├── frontend/
@@ -79,9 +89,12 @@ myapp/
 │   │   ├── components/       # Your components
 │   │   ├── contexts/         # Auth, Admin, Breadcrumb contexts
 │   │   └── lib/              # API client, types, utilities
+│   ├── src/test/            # Vitest setup
 │   ├── package.json
 │   └── vite.config.ts
 ├── app.go                    # Main application
+├── justfile                  # Dev commands (dev, build, serve, worker, test)
+├── AGENTS.md                 # Guidance for AI coding agents
 ├── go.mod
 ├── config.example.yml
 └── .gitignore
@@ -163,6 +176,15 @@ Shows database statistics: user count, admin count, audit log entries, and file 
 
 ```bash
 myapp db stats -c config.yml
+```
+
+### `myapp worker`
+
+Runs the background task worker (Asynq). Requires `tasks.enabled: true` in config
+and a reachable Redis. Register handlers in `internal/tasks/registry.go`.
+
+```bash
+myapp worker -c config.yml
 ```
 
 ## Go Library
@@ -298,14 +320,16 @@ Asynq task queue wrappers.
 ```go
 import "github.com/juanfont/juango/tasks"
 
-// Client (enqueue tasks)
-client := tasks.NewClient("localhost:6379")
-client.Enqueue(ctx, "email:send", payload)
+// Client (enqueue tasks): NewClient(redisAddr, redisPassword, redisDB)
+client := tasks.NewClient("localhost:6379", "", 0)
+defer client.Close()
+client.Enqueue("email:send", payload) // returns (*asynq.TaskInfo, error)
 
 // Server (process tasks)
-server := tasks.NewServer("localhost:6379", 10)
-server.Register("email:send", handleSendEmail)
-server.Start()
+cfg := tasks.DefaultServerConfig("localhost:6379", "", 0)
+server := tasks.NewServer(cfg)
+server.HandleFunc("email:send", handleSendEmail)
+server.Run() // blocks until shutdown
 ```
 
 ### `juango/types`
@@ -389,6 +413,11 @@ oidc:
     - profile
     - email
 
+# Background tasks (opt-in). When enabled, the app connects to Redis and the
+# `worker` command processes queued jobs.
+tasks:
+  enabled: false
+
 redis:
   addr: "localhost:6379"
 
@@ -425,27 +454,43 @@ Every scaffolded project comes with these endpoints pre-wired:
 | `/api/admin/users/{id}` | PATCH | Admin Mode | Update user (admin flag, active status) |
 | `/api/admin/audit-logs` | GET | Admin Mode | List audit logs (with filtering/pagination) |
 | `/api/admin/audit-logs/stats` | GET | Admin Mode | Audit log statistics |
+| `/api/admin/tasks/dummy` | POST | Admin Mode | Enqueue the example background task |
 
 ## Testing
 
-The project includes comprehensive integration tests:
+The repo uses [`just`](https://github.com/casey/just) for common tasks:
 
 ```bash
-# Run all tests (skips browser tests if Chrome not available)
-go test ./integration/... -v
+just test              # unit tests (go test -short)
+just test-integration  # full integration suite (needs Node; Chrome/Redis optional)
+just smoke             # containerized end-to-end smoke test (Docker)
+```
 
-# Run with short flag (skips integration tests)
+Under the hood:
+
+```bash
+# Unit tests only (skips integration)
 go test ./... -short
 
-# Run in CI with browser tests
-sudo apt-get install -y chromium-browser
+# Integration suite (scaffolds a project, builds it, runs serve + worker).
+# Browser tests skip without Chrome; the worker test skips without Redis
+# (set REDIS_ADDR to point at one).
 go test ./integration/... -v
+
+# Fully hermetic run in Docker (Go + Node + headless Chromium + Redis)
+just smoke
 ```
+
+The scaffolded frontend ships with [Vitest](https://vitest.dev) tests; run them in
+a generated project with `just test` (or `npm test` in `frontend/`).
 
 ### Test Coverage
 
-- **API Tests**: Session management, OIDC flow, protected endpoints, logout, health endpoint, first-user bootstrap
-- **Scaffolding Tests**: Project structure validation, module path handling, frontend dependencies/imports, full build, mock OIDC end-to-end
+- **API Tests**: Session management, OIDC flow (verified authenticated), protected endpoints, logout, health endpoint, first-user bootstrap
+- **Browser Tests**: Real headless-Chrome login flow, asserting an authenticated session
+- **Scaffolding Tests**: Project structure, module path handling, frontend deps/imports, full build, frontend Vitest run, mock OIDC end-to-end
+- **Background Tasks**: Worker processes an enqueued task (against Redis)
+- **Smoke (CI + local)**: The whole path in one container — scaffold → build → serve → worker
 
 ## Building for Production
 
