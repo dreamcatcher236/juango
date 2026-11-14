@@ -17,7 +17,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
 	github.com/tailscale/squibble v0.0.0-20260411062017-141f5d618bc4
-	golang.org/x/oauth2 v0.36.0
+	golang.org/x/oauth2 v0.38.0
 	modernc.org/sqlite v1.53.0
 )
 
